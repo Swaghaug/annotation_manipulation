@@ -1,8 +1,9 @@
 import os
+import math
+import argparse
 from PIL import Image
 from shapely.geometry import Polygon
 from shapely.affinity import translate
-import math
 
 def split_image_and_annotations(
     image_path,
@@ -31,23 +32,43 @@ def split_image_and_annotations(
     # 2) Load image
     image = Image.open(image_path)
     img_width, img_height = image.size
-    print(f"Image size: {img_width}x{img_height}")
-    print("Tile size:", tile_width, "x", tile_height)
+    print(f"Processing: {os.path.basename(image_path)} | Size: {img_width}x{img_height}")
+
     base_name = os.path.splitext(os.path.basename(image_path))[0]
 
     # 3) Read and parse annotations (polygon YOLO format)
+    #    We assume each line in label_path is:
+    #    class_id x1 y1 x2 y2 x3 y3 ...
+    #    in normalized [0..1] coords.
     annotations = []
-    with open(label_path, "r") as f:
-        for line in f.readlines():
-            items = line.strip().split()
-            if len(items) < 6:  # Minimum of 3 points (x1, y1, x2, y2, x3, y3)
-                print(f"Not enough vertex points to split annotation in {line.strip()}")
-                continue
-            
-            class_id = items[0]
-            coords = list(map(float, items[1:]))
-            points = [(coords[i] * img_width, coords[i + 1] * img_height) for i in range(0, len(coords), 2)]
-            annotations.append((class_id, Polygon(points)))
+    try:
+        with open(label_path, "r") as f:
+            for line in f:
+                items = line.strip().split()
+                if len(items) < 6:  # Minimum of 3 points + class_id
+                    print(f"Skipping incomplete annotation: {line.strip()}")
+                    continue
+                class_id = items[0]
+                coords = list(map(float, items[1:]))
+
+                # Convert from normalized [0..1] to absolute pixel coords
+                points = [
+                    (coords[i] * img_width, coords[i + 1] * img_height)
+                    for i in range(0, len(coords), 2)
+                ]
+                # Build polygon
+                polygon = Polygon(points)
+
+                # Attempt to fix minor geometry issues
+                polygon = polygon.buffer(0)
+                if not polygon.is_valid:
+                    print(f"Skipping invalid polygon (still invalid after fix): {line.strip()}")
+                    continue
+
+                annotations.append((class_id, polygon))
+    except FileNotFoundError:
+        print(f"No label found at {label_path}. We'll still save tiles, but no annotation data will exist.")
+        # We won't return here, because we want to generate tile images even with no annotation file.
 
     # 4) Generate tiles
     row_count = math.ceil(img_height / tile_height)
@@ -63,7 +84,7 @@ def split_image_and_annotations(
             # Crop image
             tile_image = image.crop((tile_left, tile_top, tile_right, tile_bottom))
 
-            # Prepare tile polygons
+            # Prepare tile bounding polygon (for clipping)
             tile_polygon = Polygon([
                 (tile_left, tile_top),
                 (tile_right, tile_top),
@@ -74,8 +95,15 @@ def split_image_and_annotations(
             # 5) For each annotation polygon, clip with tile polygon
             clipped_annotations = []
             for class_id, polygon in annotations:
+                # Ensure polygon is still valid before intersection
+                polygon = polygon.buffer(0)
+                if not polygon.is_valid:
+                    # If invalid, skip
+                    continue
+
                 clipped_poly = polygon.intersection(tile_polygon)
                 if not clipped_poly.is_empty:
+                    # Handle MultiPolygon or single Polygon
                     if clipped_poly.geom_type == 'MultiPolygon':
                         for subpoly in clipped_poly.geoms:
                             shifted = _shift_polygon(subpoly, tile_left, tile_top)
@@ -86,21 +114,29 @@ def split_image_and_annotations(
                         if not shifted.is_empty:
                             clipped_annotations.append((class_id, shifted))
 
-            # 6) Save tiles and annotations
-            if clipped_annotations:
-                tile_image_name = f"{base_name}_{row_idx}_{col_idx}.jpg"
-                tile_label_name = f"{base_name}_{row_idx}_{col_idx}.txt"
+            # 6) We now ALWAYS save tile image. Then we optionally save label data.
+            tile_image_name = f"{base_name}_{row_idx}_{col_idx}.jpg"
+            tile_label_name = f"{base_name}_{row_idx}_{col_idx}.txt"
 
-                # Save tile image
-                tile_image.save(os.path.join(images_out_dir, tile_image_name))
+            # Save tile image
+            tile_image.save(os.path.join(images_out_dir, tile_image_name))
 
-                # Save tile label
-                with open(os.path.join(labels_out_dir, tile_label_name), 'w') as lf:
-                    for class_id, poly in clipped_annotations:
+            # Write the label file (even if empty)
+            # Re-normalize to the tile dimensions if we have polygons
+            tile_label_path = os.path.join(labels_out_dir, tile_label_name)
+            with open(tile_label_path, 'w') as lf:
+                if clipped_annotations:
+                    for cls_id, poly in clipped_annotations:
                         coords = list(poly.exterior.coords)
-                        # Re-normalize to the tile size
-                        coords_str = ' '.join([f"{(p[0] / tile_width):.6f} {(p[1] / tile_height):.6f}" for p in coords[:-1]])
-                        lf.write(f"{class_id} {coords_str}\n")
+                        # omit last repeated point
+                        coords_str = ' '.join([
+                            f"{(p[0] / (tile_right - tile_left)):.6f} {(p[1] / (tile_bottom - tile_top)):.6f}"
+                            for p in coords[:-1]
+                        ])
+                        lf.write(f"{cls_id} {coords_str}\n")
+                else:
+                    # If no annotations, we simply leave it empty
+                    pass
 
 def _shift_polygon(polygon, shift_x, shift_y):
     """
@@ -108,17 +144,93 @@ def _shift_polygon(polygon, shift_x, shift_y):
     """
     return translate(polygon, xoff=-shift_x, yoff=-shift_y)
 
-if __name__ == "__main__":
-    # Example usage:
-    input_image = "test_dataset/images/1.png"
-    input_label = "test_dataset/labels/1.txt"
-    output_directory = "test_dataset/output"
+def split_images_in_folder(
+    input_dir,
+    output_dir,
+    tile_width=640,
+    tile_height=640,
+    valid_exts=(".png", ".jpg", ".jpeg")
+):
+    """
+    Splits all images in 'input_dir/images' into tiles, with corresponding labels
+    from 'input_dir/labels'. The results go into 'output_dir/images' & 'output_dir/labels'.
+    We assume the same base filenames for images & labels (e.g. image.png / image.txt).
+    """
+    images_dir = os.path.join(input_dir, "images")
+    labels_dir = os.path.join(input_dir, "labels")
 
-    # Split into smaller tiles (640x640 in this example)
-    split_image_and_annotations(
-        image_path=input_image,
-        label_path=input_label,
-        output_dir=output_directory,
-        tile_width=640,
-        tile_height=640
+    if not os.path.exists(images_dir):
+        print(f"Images directory not found: {images_dir}")
+        return
+    if not os.path.exists(labels_dir):
+        print(f"Labels directory not found: {labels_dir}")
+        return
+    
+    # List all valid images
+    all_images = [f for f in os.listdir(images_dir) if f.lower().endswith(valid_exts)]
+    if not all_images:
+        print(f"No images found in {images_dir} with extensions {valid_exts}")
+        return
+    
+    # Sort the files for consistency
+    all_images.sort()
+
+    # Create output folder structure
+    os.makedirs(output_dir, exist_ok=True)
+
+    for img_file in all_images:
+        image_path = os.path.join(images_dir, img_file)
+        base_name, _ = os.path.splitext(img_file)
+        label_path = os.path.join(labels_dir, base_name + ".txt")
+
+        # Perform splitting
+        split_image_and_annotations(
+            image_path=image_path,
+            label_path=label_path,
+            output_dir=output_dir,
+            tile_width=tile_width,
+            tile_height=tile_height
+        )
+
+def main():
+    parser = argparse.ArgumentParser(description="Split images into tiles and clip annotations.")
+    parser.add_argument(
+        "--input_dir",
+        type=str,
+        nargs="+",
+        required=True,
+        help="One or more directories containing subfolders 'images/' and 'labels/' to be processed."
     )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="test_dataset/output",
+        help="Directory where split tiles will be saved. Default: 'test_dataset/output'"
+    )
+    parser.add_argument(
+        "--tile_width",
+        type=int,
+        default=640,
+        help="Tile width in pixels. Default: 640"
+    )
+    parser.add_argument(
+        "--tile_height",
+        type=int,
+        default=640,
+        help="Tile height in pixels. Default: 640"
+    )
+
+    args = parser.parse_args()
+
+    # Process each input_dir in turn
+    for directory in args.input_dir:
+        print(f"\n===== Splitting images in directory: {directory} =====")
+        split_images_in_folder(
+            input_dir=directory,
+            output_dir=args.output_dir,
+            tile_width=args.tile_width,
+            tile_height=args.tile_height
+        )
+
+if __name__ == "__main__":
+    main()
