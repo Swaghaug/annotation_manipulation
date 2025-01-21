@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Dataset Splitter</title>
+    <style>
+      /* Basic 2x1 grid */
+      .container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        padding: 20px;
+      }
+      .dropzone {
+        border: 2px dashed #ccc;
+        border-radius: 8px;
+        padding: 20px;
+        text-align: center;
+        min-height: 150px;
+      }
+      button:disabled {
+        background-color: #999;
+        cursor: not-allowed;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Dataset Splitter</h1>
+    <div class="container">
+      <div class="dropzone">
+        <h3>Images ZIP</h3>
+        <input type="file" id="images_zip" accept=".zip"/>
+      </div>
+      <div class="dropzone">
+        <h3>Annotations ZIP</h3>
+        <input type="file" id="labels_zip" accept=".zip"/>
+      </div>
+    </div>
+    <div style="text-align:center; margin-top:20px;">
+      <button id="processBtn">Tile Dataset</button>
+    </div>
+    <div style="text-align:center; margin-top:10px;">
+      <button id="downloadBtn" disabled>Download Dataset</button>
+      <button id="displayBtn" disabled>Display Results</button>
+    </div>
+
+    <script>
+      const processBtn = document.getElementById("processBtn");
+      const imagesZipInput = document.getElementById("images_zip");
+      const labelsZipInput = document.getElementById("labels_zip");
+      const downloadBtn = document.getElementById("downloadBtn");
+      const displayBtn = document.getElementById("displayBtn");
+
+      processBtn.addEventListener("click", async () => {
+        // 1) Gather files
+        const imagesFile = imagesZipInput.files[0];
+        const labelsFile = labelsZipInput.files[0];
+        if(!imagesFile || !labelsFile) {
+          alert("Please select both images.zip and annotations.zip first!");
+          return;
+        }
+
+        // 2) Prepare FormData
+        const formData = new FormData();
+        formData.append("images_zip", imagesFile);
+        formData.append("labels_zip", labelsFile);
+
+        // 3) Send to /upload
+        processBtn.disabled = true;
+        processBtn.innerText = "Processing...";
+        
+        try {
+          const res = await fetch("/upload", {
+            method: "POST",
+            body: formData
+          });
+          const data = await res.json();
+          if(data.status === "ok") {
+            const batchId = data.batch_id;
+            
+            // enable the 2 buttons
+            downloadBtn.disabled = false;
+            displayBtn.disabled = false;
+            
+            // set their href
+            downloadBtn.onclick = () => {
+              window.location.href = `/download/${batchId}`;
+            };
+            displayBtn.onclick = () => {
+              window.location.href = `/display/${batchId}`;
+            };
+
+            processBtn.innerText = "Tiling Complete!";
+          } else {
+            alert("Something went wrong: " + JSON.stringify(data));
+            processBtn.innerText = "Tile Dataset";
+            processBtn.disabled = false;
+          }
+        } catch(err) {
+          console.error(err);
+          alert("Error uploading/processing!");
+          processBtn.innerText = "Tile Dataset";
+          processBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

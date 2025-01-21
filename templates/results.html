@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Results</title>
+    <style>
+      .tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 10px;
+      }
+      .tiles img {
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tiles for Batch {{ batch_id }}</h1>
+    <div class="tiles">
+      {% for tile in tiles %}
+        <div>
+          <img src="/static_placeholder/{{ tile }}" alt="{{ tile }}">
+          <p>{{ tile }}</p>
+        </div>
+      {% endfor %}
+    </div>
+  </body>
+</html>

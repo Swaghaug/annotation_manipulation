@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Tile Viewer</title>
+    <style>
+      .viewer-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        max-width: 90%;
+        margin: 0 auto;
+        margin-top: 20px;
+      }
+      .viewer-container img {
+        max-width: 100%;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      .controls {
+        text-align: center;
+        margin-top: 10px;
+      }
+      button {
+        margin: 0 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tile Viewer for {{ image_base }}</h1>
+
+    <div class="viewer-container">
+      <!-- LEFT side => annotated original -->
+      <div>
+        <img id="annotatedOriginal"
+             src="{{ url_for('serve_output_file', batch_id=batch_id, filename=annotated_filename) }}"
+             alt="Annotated Original">
+      </div>
+      <!-- RIGHT side => tile image -->
+      <div>
+        <img id="tileImage" src="" alt="Tile Image">
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="prevBtn">&larr; Previous Tile</button>
+      <button id="nextBtn">Next Tile &rarr;</button>
+    </div>
+
+    <script>
+      const tileFiles = JSON.parse('{{ tile_files|tojson }}');
+      let currentIndex = 0;
+
+      // Elements
+      const tileImage = document.getElementById("tileImage");
+      const prevBtn = document.getElementById("prevBtn");
+      const nextBtn = document.getElementById("nextBtn");
+
+      // Update function: sets the tileImage src to the current tile
+      function showTile(idx) {
+        // clamp or wrap idx
+        currentIndex = (idx + tileFiles.length) % tileFiles.length;
+        const filename = tileFiles[currentIndex];
+        // Build the tile image URL
+        // For example: /outputs/<batch_id>/tiles/<filename>
+        const tileURL = "{{ url_for('serve_tile_file', batch_id=batch_id, filename='') }}" + filename;
+        tileImage.src = tileURL;
+      }
+
+      // Button listeners
+      prevBtn.addEventListener("click", () => {
+        showTile(currentIndex - 1);
+      });
+      nextBtn.addEventListener("click", () => {
+        showTile(currentIndex + 1);
+      });
+
+      // On page load, show the first tile
+      showTile(0);
+    </script>
+  </body>
+</html>
