@@ -2,3 +2,5 @@ Pillow>=8.0.0
 shapely>=1.8.0
 opencv-python
 matplotlib
+Flask>=2.0.0
+

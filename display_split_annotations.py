@@ -195,7 +195,7 @@ class TileViewer:
             new_h = int(ch * sf)
             combined = cv2.resize(combined, (new_w, new_h))
 
-        cv2.imshow("Tile Viewer", combined)
+        cv2.imshow("Tile Viewer - Press esc to go to next image", combined)
 
     def start(self):
         while True:
